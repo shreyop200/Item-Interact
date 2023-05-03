@@ -16,59 +16,68 @@ use pocketmine\event\player\PlayerRespawnEvent;
 use function explode;
 
 class Main extends PluginBase implements Listener {
-    public function onEnable(): void{
+
+    /** @var array */
+    private $items = [];
+
+    public function onEnable(): void {
         $this->getServer()->getPluginManager()->registerEvents($this, $this);
         $this->saveDefaultConfig();
+        $this->items = $this->getConfig()->getAll();
+        unset($this->items['item-on-respawn']);
     }
 
-    public function onJoin(PlayerJoinEvent $event) {
+    public function onJoin(PlayerJoinEvent $event): void {
         $player = $event->getPlayer();
-        $itemArray = explode(':', $this->getConfig()->get("ItemID"));
-        if(!isset($itemArray[0]) || !isset($itemArray[1]) || !isset($itemArray[2])) {
-                    $this->getLogger()->error("Config Error! Make Sure To Use ID:META:COUNT.");
-        return;
+        foreach ($this->items as $itemName => $command) {
+            if (strpos($itemName, 'Item') !== false) {
+                $itemId = explode(':', $command);
+                if (count($itemId) !== 2) {
+                    $this->getLogger()->error("Invalid config for item $itemName. Use the format ID:META.");
+                    continue;
                 }
-        $player = $event->getPlayer();
-        $item = ItemFactory::getInstance()->get((int)$itemArray[0], (int)$itemArray[1], (int)$itemArray[2]); //FORMAT ID:META:COUNT
-        $item->setCustomName("§r".$this->getConfig()->get("DisplayName"));
-        $item->getNamedTag()->setInt("ItemInteractPlugin", 1);
-        $player->getInventory()->setItem($this->getConfig()->get("HotBarSlot"), $item, true);
+                $item = ItemFactory::getInstance()->get((int)$itemId[0], (int)$itemId[1], 1);
+                $customName = $this->getConfig()->get($itemName . '-Name');
+                if ($customName !== null) {
+                    $item->setCustomName($customName);
+                }
+                $lore = $this->getConfig()->get($itemName . '-Lore');
+                if ($lore !== null) {
+                    $item->setLore(explode('\n', $lore));
+                }
+                $item->getNamedTag()->setString('item-interact-command', $this->getConfig()->get($itemName . '-Command'));
+                $player->getInventory()->addItem($item);
+            }
+        }
     }
 
-    public function onDrop(PlayerDropItemEvent $event) {
+    public function onDrop(PlayerDropItemEvent $event): void {
         $item = $event->getItem();
-        if($item->getNamedTag()->hasTag("ItemInteractPlugin"))
-            $event->cancel();
+        if ($item->getNamedTag()->hasTag('item-interact-dropped')) {
+            $event->getItem()->getNamedTag()->removeTag('item-interact-dropped');
+        }
     }
 
-    public function onClick(PlayerInteractEvent $event) {
+    public function onClick(PlayerInteractEvent $event): void {
         $player = $event->getPlayer();
         $item = $player->getInventory()->getItemInHand();
-        if($item->getNamedTag()->hasTag("ItemInteractPlugin"))
-            $this->getServer()->getCommandMap()->dispatch($player, $this->getConfig()->get("command"));
+        if ($item->getNamedTag()->hasTag('item-interact-command')) {
+            $command = $item->getNamedTag()->getString('item-interact-command');
+            $this->getServer()->getCommandMap()->dispatch($player, $command);
+            $event->setCancelled();
+            if (!$item->getNamedTag()->hasTag('item-interact-dropped')) {
+                $item->getNamedTag()->setByte('item-interact-dropped', 1);
+                $player->getInventory()->setItemInHand($item);
+            }
+        }
     }
 
-    public function onTransaction(InventoryTransactionEvent $event) {
+    public function onTransaction(InventoryTransactionEvent $event): void {
         $transaction = $event->getTransaction();
         foreach ($transaction->getActions() as $action) {
-           if($action->getSourceItem()->getNamedTag()->hasTag("ItemInteractPlugin"))
-              $event->cancel();
-       }
-   }  
-    
-    public function onRespawn(PlayerRespawnEvent $event) {
-      if($this->getConfig()->get("item-on-respawn") == true){
-      $player = $event->getPlayer();
-        $itemArray = explode(':', $this->getConfig()->get("ItemID"));
-        if(!isset($itemArray[0]) || !isset($itemArray[1]) || !isset($itemArray[2])) {
-                    $this->getLogger()->error("Config Error! Make Sure To Use ID:META:COUNT.");
-        return;
-                }
-        $player = $event->getPlayer();
-        $item = ItemFactory::getInstance()->get((int)$itemArray[0], (int)$itemArray[1], (int)$itemArray[2]); //FORMAT ID:META:COUNT
-        $item->setCustomName("§r".$this->getConfig()->get("DisplayName"));
-        $item->getNamedTag()->setInt("ItemInteractPlugin", 1);
-        $player->getInventory()->setItem($this->getConfig()->get("HotBarSlot"), $item, true);
-    }
-}
-}
+            $item = $action->getSourceItem();
+            if ($item->getNamedTag()->hasTag('item-interact-command')) {
+                $event->setCancelled();
+                break;
+            }
+       
